@@ -14,6 +14,24 @@ server.bind(ADDR)
 clients = []      # list of all connected clients
 usernames = []    # list of all usernames
 
+
+def receive_message(conn):
+    msg_length = conn.recv(HEADER).decode(FORMAT)
+    if msg_length:
+        msg_length = int(msg_length)
+        msg = conn.recv(msg_length).decode(FORMAT)
+        return msg
+    return None
+ 
+
+def send_message(conn, msg):
+    message = msg.encode(FORMAT)
+    msg_length = len(message)
+    send_length = str(msg_length).encode(FORMAT)
+    send_length += b' ' * (HEADER - len(send_length))
+    conn.send(send_length)
+    conn.send(message)
+
 def handle_client(conn, addr):
     username = conn.recv(1024).decode(FORMAT)
     usernames.append(username)
@@ -24,14 +42,15 @@ def handle_client(conn, addr):
     
     connected = True
     while connected:
-        msg_length = conn.recv(HEADER).decode(FORMAT)
-        if msg_length:
-            msg_length = int(msg_length)
-            msg = conn.recv(msg_length).decode(FORMAT)
+        msg = receive_message(conn)
+        if msg:
             if msg == DISCONNECT_MESSAGE:
                 connected = False
-                
-            print(f"[{username}] {msg}")
+            else:
+                print(f"[{username}] {msg}")
+                # Server replies back to client
+                reply = f"[SERVER] Message received: {msg}"
+                send_message(conn, reply)
         
     # Remove client when disconnected
     index = clients.index(conn)

@@ -1,4 +1,5 @@
 import socket
+import threading
 
 HEADER = 64
 PORT = 8080
@@ -18,15 +19,35 @@ def send(msg):
     client.send(send_length)
     client.send(message)
     
+    
+def receive():
+    while True:
+        try:
+            msg_length = client.recv(HEADER).decode(FORMAT)
+            if msg_length:
+                msg_length = int(msg_length)
+                msg = client.recv(msg_length).decode(FORMAT)
+                print(msg)  # print server's reply
+        except:
+            print("[DISCONNECTED] Lost connection to server")
+            break
+        
+        
 # First thing — send username to server
 username = input("Enter your username: ")
 client.send(username.encode(FORMAT))
 
-    
-send("Hello World!")
-input()
-send("Hello Everyone!")
-input()
-send("Hello Meet!")
 
-send(DISCONNECT_MESSAGE)
+# Start receive thread
+receive_thread = threading.Thread(target=receive)
+receive_thread.daemon = True  # thread dies when main program exits
+receive_thread.start()
+    
+    
+# Main thread keeps taking input and sending
+while True:
+    msg = input()
+    if msg == DISCONNECT_MESSAGE:
+        send(DISCONNECT_MESSAGE)
+        break
+    send(msg)
