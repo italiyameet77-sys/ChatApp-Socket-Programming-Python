@@ -1,10 +1,10 @@
 import socket
 
 HEADER = 64
-PORT = 5050
+PORT = 8080
 FORMAT = 'utf-8'
 DISCONNECT_MESSAGE = "!DISCONNECT"
-SERVER = socket.gethostbyname(socket.gethostname())
+SERVER = "192.168.31.248"
 ADDR = (SERVER, PORT)
 
 client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -17,6 +17,11 @@ def send(msg):
     send_length += b' ' * (HEADER - len(send_length))
     client.send(send_length)
     client.send(message)
+    
+# First thing — send username to server
+username = input("Enter your username: ")
+client.send(username.encode(FORMAT))
+
     
 send("Hello World!")
 input()

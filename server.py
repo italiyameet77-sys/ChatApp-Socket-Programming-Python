@@ -2,8 +2,8 @@ import socket
 import threading
 
 HEADER = 64
-PORT = 5050
-SERVER = socket.gethostbyname(socket.gethostname())
+PORT = 8080
+SERVER = "192.168.31.248"
 ADDR = (SERVER, PORT)
 FORMAT = 'utf-8'
 DISCONNECT_MESSAGE = "!DISCONNECT"
@@ -11,8 +11,16 @@ DISCONNECT_MESSAGE = "!DISCONNECT"
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server.bind(ADDR)
 
+clients = []      # list of all connected clients
+usernames = []    # list of all usernames
+
 def handle_client(conn, addr):
-    print(f"[NEW CONNECTION] {addr} connected.")
+    username = conn.recv(1024).decode(FORMAT)
+    usernames.append(username)
+    clients.append(conn)
+    
+    print(f"[NEW CONNECTION] {username} connected from {addr}")
+
     
     connected = True
     while connected:
@@ -23,9 +31,14 @@ def handle_client(conn, addr):
             if msg == DISCONNECT_MESSAGE:
                 connected = False
                 
-            print(f"[{addr}] {msg}")
+            print(f"[{username}] {msg}")
         
+    # Remove client when disconnected
+    index = clients.index(conn)
+    clients.remove(conn)
+    usernames.remove(username)
     conn.close()
+    print(f"[DISCONNECTED] {username} disconnected")
         
         
 def start():
