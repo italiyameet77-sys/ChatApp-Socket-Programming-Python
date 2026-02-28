@@ -32,13 +32,25 @@ def send_message(conn, msg):
     conn.send(send_length)
     conn.send(message)
 
+
+def broadcast(conn, msg):
+    # Send message to ALL other connected clients
+    for client in clients:
+        if client != conn:
+            send_message(client, msg)
+
+
 def handle_client(conn, addr):
+    # First message is always username
     username = conn.recv(1024).decode(FORMAT)
     usernames.append(username)
     clients.append(conn)
     
     print(f"[NEW CONNECTION] {username} connected from {addr}")
 
+    # Notify everyone that new user joined
+    broadcast(conn, f"[SERVER] {username} joined the chat!")
+    
     
     connected = True
     while connected:
@@ -48,9 +60,13 @@ def handle_client(conn, addr):
                 connected = False
             else:
                 print(f"[{username}] {msg}")
-                # Server replies back to client
-                reply = f"[SERVER] Message received: {msg}"
-                send_message(conn, reply)
+                 # Broadcast to everyone
+                broadcast(conn, f"[{username}] {msg}")
+    
+    
+    # Notify everyone that user left
+    broadcast(conn, f"[SERVER] {username} left the chat!")
+    
         
     # Remove client when disconnected
     index = clients.index(conn)
