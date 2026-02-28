@@ -1,5 +1,6 @@
 import socket
 import threading
+import os
 
 HEADER = 64
 PORT = 8080
@@ -7,6 +8,11 @@ SERVER = "192.168.31.248"
 ADDR = (SERVER, PORT)
 FORMAT = 'utf-8'
 DISCONNECT_MESSAGE = "!DISCONNECT"
+FILE_MESSAGE = "!FILE"
+BUFFER = 1024
+
+os.makedirs("server_files", exist_ok=True)
+
 
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server.bind(ADDR)
@@ -30,7 +36,7 @@ def send_message(conn, msg):
     send_length = str(msg_length).encode(FORMAT)
     send_length += b' ' * (HEADER - len(send_length))
     conn.send(send_length)
-    conn.send(message)
+    conn.send(message)  
 
 
 def broadcast(conn, msg):
@@ -38,6 +44,37 @@ def broadcast(conn, msg):
     for client in clients:
         if client != conn:
             send_message(client, msg)
+
+
+def broadcast_file(filename, filesize, filedata, conn):
+    for client in clients:
+        if client != conn:
+            # Telling receiver a file is coming
+            send_message(client, FILE_MESSAGE)
+            # Sending filename
+            send_message(client, filename)
+            # Sending filesize
+            send_message(client, str(filesize))
+            # Sending actual file data
+            client.send(filedata)
+
+
+def receive_file(conn):
+    # Receive filename
+    filename = receive_message(conn)
+    # Receive filesize
+    filesize = int(receive_message(conn))
+    
+    # Receive file data in chunks
+    filedata = b''
+    
+    while len(filedata) < filesize:
+        chunk = conn.recv(BUFFER)
+        if not chunk:
+            break
+        filedata += chunk
+    
+    return filename, filesize, filedata
 
 
 def handle_client(conn, addr):
@@ -58,6 +95,20 @@ def handle_client(conn, addr):
         if msg:
             if msg == DISCONNECT_MESSAGE:
                 connected = False
+            
+            elif msg == FILE_MESSAGE:
+                # File is coming
+                filename, filesize, filedata = receive_file(conn)
+                print(f"[{username}] sent file: {filename} ({filesize} bytes)")
+                
+                # Save file on server
+                with open(f"server_files/server_received_{filename}", 'wb') as f:
+                    f.write(filedata)
+                
+                # Broadcast file to all other clients
+                broadcast_file(filename, filesize, filedata, conn)
+                broadcast(conn, f"[{username}] sent a file: {filename}")
+                
             else:
                 print(f"[{username}] {msg}")
                  # Broadcast to everyone
