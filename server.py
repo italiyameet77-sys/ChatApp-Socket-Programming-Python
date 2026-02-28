@@ -22,12 +22,15 @@ usernames = []    # list of all usernames
 
 
 def receive_message(conn):
-    msg_length = conn.recv(HEADER).decode(FORMAT)
-    if msg_length:
-        msg_length = int(msg_length)
-        msg = conn.recv(msg_length).decode(FORMAT)
-        return msg
-    return None
+    try:
+        msg_length = conn.recv(HEADER).decode(FORMAT)
+        if msg_length:
+            msg_length = int(msg_length)
+            msg = conn.recv(msg_length).decode(FORMAT)
+            return msg
+        return None
+    except:
+        return None
  
 
 def send_message(conn, msg):
