@@ -13,6 +13,8 @@ FILE_MESSAGE = "!FILE"
 BUFFER = 1024
 USERS_MESSAGE = "!USERS"
 DM_MESSAGE = "!DM"
+HISTORY_FILE = "chat_history.txt"
+HISTORY_LIMIT = 10  # show last 10 messages
 
 os.makedirs("server_files", exist_ok=True)
 
@@ -108,6 +110,33 @@ def send_private_message(sender_username, target_username, msg):
     sender_conn = clients[index]
     send_message(sender_conn, f"[{timestamp}] [PRIVATE → {target_username}] {msg}")
     
+  
+def save_message(msg):
+    # Append message to history file
+    with open(HISTORY_FILE, 'a', encoding='utf-8') as f:
+        f.write(msg + "\n")
+        
+        
+def send_history(conn):
+    # Check if history file exists
+    import os
+    if not os.path.exists(HISTORY_FILE):
+        send_message(conn, "[NO HISTORY YET]")
+        return
+    
+    # Read all lines
+    with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+    
+    # Get last 10 messages
+    last_messages = lines[-HISTORY_LIMIT:]
+    
+    # Send history to new client
+    send_message(conn, "\n─────── CHAT HISTORY ───────")
+    for line in last_messages:
+        send_message(conn, line.strip())
+    send_message(conn, "─────── LIVE CHAT ───────\n")
+    
     
 def handle_client(conn, addr):
     # First message is always username
@@ -118,7 +147,14 @@ def handle_client(conn, addr):
     timestamp = datetime.now().strftime("%I:%M %p")
     print(f"[{timestamp}] [NEW CONNECTION] {username} connected from {addr}")
 
-    # Notify everyone that new user joined
+    # Send history to new client first
+    send_history(conn)
+    
+    # When user joins
+    join_msg = f"[{datetime.now().strftime('%I:%M %p')}] [SERVER] {username} joined the chat!"
+    save_message(join_msg)
+    
+    # then Notify everyone that new user joined
     broadcast(conn, f"[SERVER] {username} joined the chat!")
     
     
@@ -167,6 +203,11 @@ def handle_client(conn, addr):
             else:
                 timestamp = datetime.now().strftime("%I:%M %p")
                 print(f"[{timestamp}] [{username}] {msg}")
+                
+                # Save message to history
+                timestamped_msg = f"[{timestamp}] [{username}] {msg}"
+                save_message(timestamped_msg)
+
                 # Broadcast to everyone
                 broadcast(conn, f"[{username}] {msg}")
     
@@ -174,6 +215,9 @@ def handle_client(conn, addr):
     # Notify everyone that user left
     broadcast(conn, f"[SERVER] {username} left the chat!")
     
+    # When user leaves
+    leave_msg = f"[{datetime.now().strftime('%I:%M %p')}] [SERVER] {username} left the chat!"
+    save_message(leave_msg)
         
     # Remove client when disconnected
     index = clients.index(conn)
