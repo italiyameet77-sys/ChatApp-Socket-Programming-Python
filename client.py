@@ -1,15 +1,17 @@
 import socket
 import threading
 import os
+from datetime import datetime
 
 HEADER = 64
 PORT = 8080
 FORMAT = 'utf-8'
 DISCONNECT_MESSAGE = "!DISCONNECT"
 FILE_MESSAGE = "!FILE"
-SERVER = "192.168.31.248"
+SERVER = "192.168.1.7"
 ADDR = (SERVER, PORT)
 BUFFER = 1024
+USERS_MESSAGE = "!USERS"
 
 os.makedirs("received_files", exist_ok=True)
 
@@ -106,6 +108,9 @@ while True:
         send(DISCONNECT_MESSAGE)
         break
     
+    elif msg == USERS_MESSAGE:
+        send(USERS_MESSAGE)
+        
     elif msg.startswith("!SENDFILE"):
         # Usage: !SENDFILE path/to/file.jpg
         filepath = msg.split(" ", 1)[1]
@@ -113,3 +118,6 @@ while True:
         
     else:
         send(msg)
+         # Show your own message with timestamp
+        timestamp = datetime.now().strftime("%I:%M %p")
+        print(f"[{timestamp}] [YOU] {msg}")

@@ -1,15 +1,17 @@
 import socket
 import threading
 import os
+from datetime import datetime 
 
 HEADER = 64
 PORT = 8080
-SERVER = "192.168.31.248"
+SERVER = "192.168.1.7"
 ADDR = (SERVER, PORT)
 FORMAT = 'utf-8'
 DISCONNECT_MESSAGE = "!DISCONNECT"
 FILE_MESSAGE = "!FILE"
 BUFFER = 1024
+USERS_MESSAGE = "!USERS"
 
 os.makedirs("server_files", exist_ok=True)
 
@@ -43,10 +45,12 @@ def send_message(conn, msg):
 
 
 def broadcast(conn, msg):
+    timestamp = datetime.now().strftime("%I:%M %p")
+    timestamped_msg = f"[{timestamp}] {msg}"
     # Send message to ALL other connected clients
     for client in clients:
         if client != conn:
-            send_message(client, msg)
+            send_message(client, timestamped_msg)
 
 
 def broadcast_file(filename, filesize, filedata, conn):
@@ -86,7 +90,8 @@ def handle_client(conn, addr):
     usernames.append(username)
     clients.append(conn)
     
-    print(f"[NEW CONNECTION] {username} connected from {addr}")
+    timestamp = datetime.now().strftime("%I:%M %p")
+    print(f"[{timestamp}] [NEW CONNECTION] {username} connected from {addr}")
 
     # Notify everyone that new user joined
     broadcast(conn, f"[SERVER] {username} joined the chat!")
@@ -99,6 +104,17 @@ def handle_client(conn, addr):
             if msg == DISCONNECT_MESSAGE:
                 connected = False
             
+            elif msg == USERS_MESSAGE:
+                # Building online users list
+                timestamp = datetime.now().strftime("%I:%M %p")
+                users_list = f"\n[{timestamp}] [ONLINE USERS]\n"
+                for i, user in enumerate(usernames, 1):
+                    users_list += f"{i}. {user}\n"
+                users_list += f"Total: {len(usernames)} users online"
+    
+                # Sending list back to requesting client only
+                send_message(conn, users_list)
+                
             elif msg == FILE_MESSAGE:
                 # File is coming
                 filename, filesize, filedata = receive_file(conn)
@@ -113,7 +129,8 @@ def handle_client(conn, addr):
                 broadcast(conn, f"[{username}] sent a file: {filename}")
                 
             else:
-                print(f"[{username}] {msg}")
+                timestamp = datetime.now().strftime("%I:%M %p")
+                print(f"[{timestamp}] [{username}] {msg}")
                  # Broadcast to everyone
                 broadcast(conn, f"[{username}] {msg}")
     
@@ -127,7 +144,8 @@ def handle_client(conn, addr):
     clients.remove(conn)
     usernames.remove(username)
     conn.close()
-    print(f"[DISCONNECTED] {username} disconnected")
+    timestamp = datetime.now().strftime("%I:%M %p")
+    print(f"[{timestamp}] [DISCONNECTED] {username} disconnected")
         
         
 def start():
