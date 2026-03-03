@@ -1,0 +1,5 @@
+
+2026-03-03 21:38:54,971 - INFO - Secure server is starting...
+2026-03-03 21:38:54,976 - INFO - Database initialized
+2026-03-03 21:38:55,011 - INFO - SSL context created
+2026-03-03 21:38:55,012 - INFO - Secure server listening on port 8080
