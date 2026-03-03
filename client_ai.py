@@ -1,5 +1,5 @@
 # ============================================================
-#   CHAT CLIENT
+#   CHAT CLIENT — DEPLOYMENT LEVEL
 #   Commands:
 #     !DISCONNECT        → leave the chat
 #     !USERS             → see online users
@@ -10,6 +10,7 @@
 import socket
 import threading
 import os
+import ssl
 from datetime import datetime
 
 
@@ -17,28 +18,28 @@ from datetime import datetime
 # CONFIGURATION
 # ─────────────────────────────────────
 
-HEADER   = 64               # fixed header size in bytes
-PORT     = 8080             # server port
-FORMAT   = 'utf-8'          # encoding format
-BUFFER   = 1024             # file transfer chunk size
-SERVER   = "192.168.1.7"   # server's IP address (change to server's actual IP)
+HEADER   = 64
+PORT     = 8080
+FORMAT   = 'utf-8'
+BUFFER   = 1024
+SERVER   = "192.168.1.7"   # change to server's IP
 ADDR     = (SERVER, PORT)
+CERT_FILE = "cert.pem"     # must be same cert as server
 
 # special command keywords
 DISCONNECT_MESSAGE = "!DISCONNECT"
 FILE_MESSAGE       = "!FILE"
 USERS_MESSAGE      = "!USERS"
 DM_MESSAGE         = "!DM"
+REGISTER_MESSAGE   = "!REGISTER"
+LOGIN_MESSAGE      = "!LOGIN"
 
 
 # ─────────────────────────────────────
 # SETUP
 # ─────────────────────────────────────
 
-os.makedirs("received_files", exist_ok=True)  # folder to save received files
-
-client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-client.connect(ADDR)
+os.makedirs("received_files", exist_ok=True)
 
 
 # ─────────────────────────────────────
@@ -50,17 +51,32 @@ def get_timestamp():
 
 
 # ─────────────────────────────────────
+# SSL SETUP
+# ─────────────────────────────────────
+
+def create_ssl_context():
+    """Create SSL context for secure connection to server."""
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.load_verify_locations(CERT_FILE)  # verify server's certificate
+    context.check_hostname = False            # disable hostname check for self-signed cert
+    return context
+
+
+# ─────────────────────────────────────
 # CORE: SEND MESSAGE
 # ─────────────────────────────────────
 
 def send(msg):
     """Send a text message to the server with a fixed-size header."""
-    message     = msg.encode(FORMAT)
-    msg_length  = len(message)
-    send_length = str(msg_length).encode(FORMAT)
-    send_length += b' ' * (HEADER - len(send_length))  # pad header to fixed size
-    client.send(send_length)
-    client.send(message)
+    try:
+        message     = msg.encode(FORMAT)
+        msg_length  = len(message)
+        send_length = str(msg_length).encode(FORMAT)
+        send_length += b' ' * (HEADER - len(send_length))
+        client.send(send_length)
+        client.send(message)
+    except:
+        print("[ERROR] Failed to send message!")
 
 
 # ─────────────────────────────────────
@@ -73,16 +89,16 @@ def send_file(filepath):
         print("[ERROR] File not found!")
         return
 
-    filename = os.path.basename(filepath)  # extract filename from full path
-    filesize = os.path.getsize(filepath)   # get file size in bytes
+    filename = os.path.basename(filepath)
+    filesize = os.path.getsize(filepath)
 
     with open(filepath, 'rb') as f:
         filedata = f.read()
 
-    send(FILE_MESSAGE)       # signal: file is coming
-    send(filename)            # send filename
-    send(str(filesize))       # send filesize
-    client.send(filedata)     # send raw file bytes
+    send(FILE_MESSAGE)
+    send(filename)
+    send(str(filesize))
+    client.send(filedata)
 
     print(f"[{get_timestamp()}] [SENT] {filename} ({filesize} bytes)")
 
@@ -93,15 +109,12 @@ def send_file(filepath):
 
 def receive_file():
     """Receive a file from the server in chunks and save it."""
-    # receive filename
     msg_length = client.recv(HEADER).decode(FORMAT)
     filename   = client.recv(int(msg_length)).decode(FORMAT)
 
-    # receive filesize
     msg_length = client.recv(HEADER).decode(FORMAT)
     filesize   = int(client.recv(int(msg_length)).decode(FORMAT))
 
-    # receive file data in chunks
     filedata = b''
     while len(filedata) < filesize:
         chunk = client.recv(BUFFER)
@@ -109,7 +122,6 @@ def receive_file():
             break
         filedata += chunk
 
-    # save received file
     with open(f"received_files/received_{filename}", 'wb') as f:
         f.write(filedata)
 
@@ -117,7 +129,7 @@ def receive_file():
 
 
 # ─────────────────────────────────────
-# RECEIVE THREAD (runs in background)
+# RECEIVE THREAD
 # ─────────────────────────────────────
 
 def receive():
@@ -130,46 +142,117 @@ def receive():
                 msg = client.recv(msg_length).decode(FORMAT)
 
                 if msg == FILE_MESSAGE:
-                    receive_file()  # handle incoming file
+                    receive_file()
                 else:
-                    print(msg)      # print regular message
-
+                    print(msg)
         except:
             print("[DISCONNECTED] Lost connection to server")
             break
 
 
 # ─────────────────────────────────────
-# MAIN: LOGIN & START
+# AUTHENTICATION
 # ─────────────────────────────────────
 
-# send username to server first
-username = input("Enter your username: ")
-client.send(username.encode(FORMAT))
+def authenticate():
+    """Handle registration or login."""
+    print("\n" + "="*40)
+    print("       WELCOME TO CHAT APP 🔐")
+    print("="*40)
+    print("1. Login")
+    print("2. Register")
+    print("="*40)
 
-# start background thread to receive messages
+    while True:
+        choice = input("Enter choice (1 or 2): ").strip()
+
+        if choice == "1":
+            # login
+            username = input("Username: ").strip()
+            password = input("Password: ").strip()
+
+            send(LOGIN_MESSAGE)
+            send(username)
+            send(password)
+
+            # wait for server response
+            msg_length = client.recv(HEADER).decode(FORMAT)
+            response   = client.recv(int(msg_length)).decode(FORMAT)
+            print(f"\n[SERVER] {response}")
+
+            if "successful" in response.lower():
+                return username
+            else:
+                print("Try again!\n")
+
+        elif choice == "2":
+            # register
+            username = input("Choose username: ").strip()
+            password = input("Choose password: ").strip()
+
+            send(REGISTER_MESSAGE)
+            send(username)
+            send(password)
+
+            # wait for server response
+            msg_length = client.recv(HEADER).decode(FORMAT)
+            response   = client.recv(int(msg_length)).decode(FORMAT)
+            print(f"\n[SERVER] {response}")
+
+            if "successful" in response.lower():
+                return username
+            else:
+                print("Try again!\n")
+
+        else:
+            print("Invalid choice! Enter 1 or 2")
+
+
+# ─────────────────────────────────────
+# MAIN: CONNECT & START
+# ─────────────────────────────────────
+
+# create SSL context
+ssl_context = create_ssl_context()
+
+# create socket
+raw_client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+# wrap with SSL
+client = ssl_context.wrap_socket(raw_client, server_hostname=SERVER)
+
+# connect to server
+try:
+    client.connect(ADDR)
+    print(f"[{get_timestamp()}] [CONNECTED] Secure connection established 🔐")
+except Exception as e:
+    print(f"[ERROR] Could not connect to server: {str(e)}")
+    exit()
+
+# authenticate
+username = authenticate()
+
+# start receive thread
 receive_thread = threading.Thread(target=receive)
-receive_thread.daemon = True  # thread dies automatically when main program exits
+receive_thread.daemon = True
 receive_thread.start()
 
-print(f"[{get_timestamp()}] Connected as {username}. Type !DISCONNECT to leave.\n")
+print(f"\n[{get_timestamp()}] Welcome {username}! Type !DISCONNECT to leave.\n")
 
 
 # ─────────────────────────────────────
-# MAIN LOOP: HANDLE USER INPUT
+# MAIN LOOP
 # ─────────────────────────────────────
 
 while True:
     msg = input()
 
     if msg == DISCONNECT_MESSAGE:
-        # leave the chat
         send(DISCONNECT_MESSAGE)
         print(f"[{get_timestamp()}] You left the chat.")
         break
 
     elif msg.startswith(DM_MESSAGE):
-        # private message → format: !DM <username> <message>
         parts = msg.split(" ", 2)
         if len(parts) < 3:
             print("[ERROR] Usage: !DM username message")
@@ -177,11 +260,9 @@ while True:
             send(msg)
 
     elif msg == USERS_MESSAGE:
-        # request online users list
         send(USERS_MESSAGE)
 
     elif msg.startswith("!SENDFILE"):
-        # send a file → format: !SENDFILE <filepath>
         parts = msg.split(" ", 1)
         if len(parts) < 2:
             print("[ERROR] Usage: !SENDFILE filepath")
@@ -189,6 +270,5 @@ while True:
             send_file(parts[1])
 
     else:
-        # regular message
         send(msg)
-        print(f"[{get_timestamp()}] [YOU] {msg}")  # show own message with timestamp
+        print(f"[{get_timestamp()}] [YOU] {msg}")

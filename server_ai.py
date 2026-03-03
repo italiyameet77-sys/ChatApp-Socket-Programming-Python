@@ -1,12 +1,16 @@
 # ============================================================
-#   CHAT SERVER
+#   CHAT SERVER — DEPLOYMENT LEVEL
 #   Features: Multi-client, File Transfer, Private Messaging,
-#             Online Users, Message History, Timestamps
+#             Online Users, Message History, Timestamps,
+#             SQLite Database, Authentication, SSL Encryption
 # ============================================================
 
 import socket
 import threading
 import os
+import ssl
+import sqlite3
+import bcrypt
 from datetime import datetime
 
 
@@ -14,33 +18,176 @@ from datetime import datetime
 # CONFIGURATION
 # ─────────────────────────────────────
 
-HEADER           = 64                  # fixed header size in bytes
-PORT             = 8080                # server port
-SERVER           = "0.0.0.0"          # listen on all interfaces
+HEADER           = 64
+PORT             = 8080
+SERVER           = "0.0.0.0"
 ADDR             = (SERVER, PORT)
-FORMAT           = 'utf-8'             # encoding format
-BUFFER           = 1024               # file transfer chunk size
-HISTORY_FILE     = "chat_history.txt" # chat log file
-HISTORY_LIMIT    = 10                 # number of past messages to show on join
+FORMAT           = 'utf-8'
+BUFFER           = 1024
+HISTORY_LIMIT    = 10
+DATABASE_FILE    = "chat.db"
+CERT_FILE        = "cert.pem"
+KEY_FILE         = "key.pem"
 
 # special command keywords
 DISCONNECT_MESSAGE = "!DISCONNECT"
 FILE_MESSAGE       = "!FILE"
 USERS_MESSAGE      = "!USERS"
 DM_MESSAGE         = "!DM"
+REGISTER_MESSAGE   = "!REGISTER"
+LOGIN_MESSAGE      = "!LOGIN"
 
 
 # ─────────────────────────────────────
-# SETUP
+# SETUP — FOLDERS
 # ─────────────────────────────────────
 
-os.makedirs("server_files", exist_ok=True)  # folder to save received files
+os.makedirs("server_files", exist_ok=True)
+
+
+# ─────────────────────────────────────
+# DATABASE SETUP
+# ─────────────────────────────────────
+
+def init_database():
+    """Create database tables if they don't exist."""
+    conn = sqlite3.connect(DATABASE_FILE)
+    cursor = conn.cursor()
+
+    # users table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            username   TEXT UNIQUE NOT NULL,
+            password   TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    # messages table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS messages (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            sender     TEXT NOT NULL,
+            message    TEXT NOT NULL,
+            timestamp  TEXT NOT NULL
+        )
+    """)
+
+    conn.commit()
+    conn.close()
+    print(f"[{get_timestamp()}] [DATABASE] Database initialized ✅")
+
+
+def register_user(username, password):
+    """Register a new user. Returns (success, message)."""
+    try:
+        conn   = sqlite3.connect(DATABASE_FILE)
+        cursor = conn.cursor()
+
+        # check if username already exists
+        existing = cursor.execute(
+            "SELECT username FROM users WHERE username=?", (username,)
+        ).fetchone()
+
+        if existing:
+            conn.close()
+            return False, "Username already taken!"
+
+        # hash the password
+        hashed = bcrypt.hashpw(password.encode(FORMAT), bcrypt.gensalt())
+
+        # save to database
+        cursor.execute(
+            "INSERT INTO users (username, password, created_at) VALUES (?, ?, ?)",
+            (username, hashed, get_timestamp())
+        )
+        conn.commit()
+        conn.close()
+        return True, "Registration successful!"
+
+    except Exception as e:
+        return False, f"Registration error: {str(e)}"
+
+
+def login_user(username, password):
+    """Verify login credentials. Returns (success, message)."""
+    try:
+        conn   = sqlite3.connect(DATABASE_FILE)
+        cursor = conn.cursor()
+
+        # find user in database
+        user = cursor.execute(
+            "SELECT password FROM users WHERE username=?", (username,)
+        ).fetchone()
+
+        conn.close()
+
+        if not user:
+            return False, "User not found! Please register first."
+
+        # check password against hash
+        if bcrypt.checkpw(password.encode(FORMAT), user[0]):
+            return True, "Login successful!"
+        else:
+            return False, "Wrong password!"
+
+    except Exception as e:
+        return False, f"Login error: {str(e)}"
+
+
+def save_message_db(sender, message):
+    """Save a message to the database."""
+    try:
+        conn = sqlite3.connect(DATABASE_FILE)
+        conn.execute(
+            "INSERT INTO messages (sender, message, timestamp) VALUES (?, ?, ?)",
+            (sender, message, get_timestamp())
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[ERROR] Failed to save message: {str(e)}")
+
+
+def get_message_history():
+    """Fetch last N messages from database."""
+    try:
+        conn     = sqlite3.connect(DATABASE_FILE)
+        messages = conn.execute(
+            "SELECT sender, message, timestamp FROM messages ORDER BY id DESC LIMIT ?",
+            (HISTORY_LIMIT,)
+        ).fetchall()
+        conn.close()
+        # reverse to show oldest first
+        messages.reverse()
+        return messages
+    except:
+        return []
+
+
+# ─────────────────────────────────────
+# SSL SETUP
+# ─────────────────────────────────────
+
+def create_ssl_context():
+    """Create SSL context for secure connections."""
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(CERT_FILE, KEY_FILE)
+    print(f"[{get_timestamp()}] [SSL] SSL context created ✅")
+    return context
+
+
+# ─────────────────────────────────────
+# SERVER SOCKET SETUP
+# ─────────────────────────────────────
 
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 server.bind(ADDR)
 
-clients   = []  # list of all connected client sockets
-usernames = []  # list of all connected usernames (parallel to clients)
+clients   = []
+usernames = []
 
 
 # ─────────────────────────────────────
@@ -52,17 +199,20 @@ def get_timestamp():
 
 
 # ─────────────────────────────────────
-# CORE: SEND & RECEIVE MESSAGES
+# CORE: SEND & RECEIVE
 # ─────────────────────────────────────
 
 def send_message(conn, msg):
     """Send a message to a specific client with a fixed-size header."""
-    message     = msg.encode(FORMAT)
-    msg_length  = len(message)
-    send_length = str(msg_length).encode(FORMAT)
-    send_length += b' ' * (HEADER - len(send_length))  # pad header to fixed size
-    conn.send(send_length)
-    conn.send(message)
+    try:
+        message     = msg.encode(FORMAT)
+        msg_length  = len(message)
+        send_length = str(msg_length).encode(FORMAT)
+        send_length += b' ' * (HEADER - len(send_length))
+        conn.send(send_length)
+        conn.send(message)
+    except:
+        pass
 
 
 def receive_message(conn):
@@ -75,11 +225,11 @@ def receive_message(conn):
             return msg
         return None
     except:
-        return None  # client disconnected abruptly
+        return None
 
 
 # ─────────────────────────────────────
-# BROADCAST: TEXT & FILES
+# BROADCAST
 # ─────────────────────────────────────
 
 def broadcast(conn, msg):
@@ -94,10 +244,10 @@ def broadcast_file(filename, filesize, filedata, conn):
     """Send a file to all clients except the sender."""
     for client in clients:
         if client != conn:
-            send_message(client, FILE_MESSAGE)       # signal: file coming
-            send_message(client, filename)            # send filename
-            send_message(client, str(filesize))       # send filesize
-            client.send(filedata)                     # send raw file bytes
+            send_message(client, FILE_MESSAGE)
+            send_message(client, filename)
+            send_message(client, str(filesize))
+            client.send(filedata)
 
 
 # ─────────────────────────────────────
@@ -127,17 +277,14 @@ def send_private_message(sender_username, target_username, msg):
     """Send a private message from one user to another."""
     timestamp = get_timestamp()
 
-    # check if target user is online
     if target_username not in usernames:
         sender_index = usernames.index(sender_username)
         send_message(clients[sender_index], f"[{timestamp}] [ERROR] User '{target_username}' not found!")
         return
 
-    # send to target
     target_index = usernames.index(target_username)
     send_message(clients[target_index], f"[{timestamp}] [PRIVATE] [{sender_username}] {msg}")
 
-    # confirm to sender
     sender_index = usernames.index(sender_username)
     send_message(clients[sender_index], f"[{timestamp}] [PRIVATE → {target_username}] {msg}")
 
@@ -146,47 +293,89 @@ def send_private_message(sender_username, target_username, msg):
 # MESSAGE HISTORY
 # ─────────────────────────────────────
 
-def save_message(msg):
-    """Append a message to the chat history file."""
-    with open(HISTORY_FILE, 'a', encoding='utf-8') as f:
-        f.write(msg + "\n")
-
-
 def send_history(conn):
-    """Send the last N messages from history to a newly joined client."""
-    if not os.path.exists(HISTORY_FILE):
+    """Send the last N messages from database to a newly joined client."""
+    messages = get_message_history()
+
+    if not messages:
         send_message(conn, "[NO HISTORY YET]")
         return
 
-    with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
-        lines = f.readlines()
-
-    last_messages = lines[-HISTORY_LIMIT:]
-
     send_message(conn, "\n─────── CHAT HISTORY ───────")
-    for line in last_messages:
-        send_message(conn, line.strip())
+    for sender, message, timestamp in messages:
+        send_message(conn, f"[{timestamp}] [{sender}] {message}")
     send_message(conn, "─────────── LIVE CHAT ───────────\n")
 
 
 # ─────────────────────────────────────
-# CLIENT HANDLER (runs on separate thread per client)
+# AUTHENTICATION HANDLER
+# ─────────────────────────────────────
+
+def authenticate_client(conn):
+    """Handle client registration or login. Returns username if successful."""
+    while True:
+        # receive auth type: !REGISTER or !LOGIN
+        auth_type = receive_message(conn)
+
+        if auth_type is None:
+            return None
+
+        if auth_type == REGISTER_MESSAGE:
+            # receive username and password
+            username = receive_message(conn)
+            password = receive_message(conn)
+
+            success, message = register_user(username, password)
+            send_message(conn, message)
+
+            if success:
+                print(f"[{get_timestamp()}] [AUTH] New user registered: {username}")
+                return username
+
+        elif auth_type == LOGIN_MESSAGE:
+            # receive username and password
+            username = receive_message(conn)
+            password = receive_message(conn)
+
+            success, message = login_user(username, password)
+            send_message(conn, message)
+
+            if success:
+                print(f"[{get_timestamp()}] [AUTH] User logged in: {username}")
+                return username
+
+        else:
+            send_message(conn, "[ERROR] Invalid auth type! Use !REGISTER or !LOGIN")
+
+
+# ─────────────────────────────────────
+# CLIENT HANDLER
 # ─────────────────────────────────────
 
 def handle_client(conn, addr):
-    # receive username (first message from client)
-    username = conn.recv(1024).decode(FORMAT)
+    print(f"[{get_timestamp()}] [NEW CONNECTION] {addr} connected")
+
+    # authenticate first
+    username = authenticate_client(conn)
+
+    if not username:
+        conn.close()
+        return
+
+    # check if user already connected
+    if username in usernames:
+        send_message(conn, "[ERROR] This account is already logged in!")
+        conn.close()
+        return
+
     usernames.append(username)
     clients.append(conn)
-    print(f"[{get_timestamp()}] [NEW CONNECTION] {username} connected from {addr}")
+    print(f"[{get_timestamp()}] [AUTHENTICATED] {username} joined from {addr}")
 
-    # send chat history to new client
+    # send history and announce join
     send_history(conn)
-
-    # log and announce join
-    join_msg = f"[{get_timestamp()}] [SERVER] {username} joined the chat!"
-    save_message(join_msg)
     broadcast(conn, f"[SERVER] {username} joined the chat!")
+    save_message_db("SERVER", f"{username} joined the chat!")
 
     # ── main message loop ──
     connected = True
@@ -194,14 +383,12 @@ def handle_client(conn, addr):
         msg = receive_message(conn)
 
         if msg is None:
-            # client disconnected abruptly
             connected = False
 
         elif msg == DISCONNECT_MESSAGE:
             connected = False
 
         elif msg.startswith(DM_MESSAGE):
-            # format: !DM <username> <message>
             parts = msg.split(" ", 2)
             if len(parts) < 3:
                 send_message(conn, f"[{get_timestamp()}] [ERROR] Usage: !DM username message")
@@ -209,7 +396,6 @@ def handle_client(conn, addr):
                 send_private_message(username, parts[1], parts[2])
 
         elif msg == USERS_MESSAGE:
-            # build and send online users list
             timestamp  = get_timestamp()
             users_list = f"\n[{timestamp}] [ONLINE USERS]\n"
             for i, user in enumerate(usernames, 1):
@@ -218,11 +404,9 @@ def handle_client(conn, addr):
             send_message(conn, users_list)
 
         elif msg == FILE_MESSAGE:
-            # receive and forward file
             filename, filesize, filedata = receive_file(conn)
             print(f"[{get_timestamp()}] [{username}] sent file: {filename} ({filesize} bytes)")
 
-            # save on server
             with open(f"server_files/server_received_{filename}", 'wb') as f:
                 f.write(filedata)
 
@@ -230,19 +414,20 @@ def handle_client(conn, addr):
             broadcast(conn, f"[{username}] sent a file: {filename}")
 
         else:
-            # regular message — log, save, broadcast
             timestamp = get_timestamp()
             print(f"[{timestamp}] [{username}] {msg}")
-            save_message(f"[{timestamp}] [{username}] {msg}")
+            save_message_db(username, msg)
             broadcast(conn, f"[{username}] {msg}")
 
     # ── cleanup on disconnect ──
     broadcast(conn, f"[SERVER] {username} left the chat!")
-    save_message(f"[{get_timestamp()}] [SERVER] {username} left the chat!")
+    save_message_db("SERVER", f"{username} left the chat!")
 
-    index = clients.index(conn)
-    clients.remove(conn)
-    usernames.remove(username)
+    if username in usernames:
+        index = usernames.index(username)
+        clients.remove(conn)
+        usernames.remove(username)
+
     conn.close()
     print(f"[{get_timestamp()}] [DISCONNECTED] {username} disconnected")
 
@@ -252,14 +437,28 @@ def handle_client(conn, addr):
 # ─────────────────────────────────────
 
 def start():
-    server.listen()
-    print(f"[LISTENING] Server is listening on port {PORT}")
+    # initialize database
+    init_database()
+
+    # create SSL context
+    ssl_context = create_ssl_context()
+
+    # wrap server with SSL
+    secure_server = ssl_context.wrap_socket(server, server_side=True)
+
+    secure_server.listen()
+    print(f"[{get_timestamp()}] [LISTENING] Secure server listening on port {PORT} 🔐")
+
     while True:
-        conn, addr = server.accept()
-        thread = threading.Thread(target=handle_client, args=(conn, addr))
-        thread.start()
-        print(f"[ACTIVE CONNECTIONS] {threading.active_count() - 1}")
+        try:
+            conn, addr = secure_server.accept()
+            thread = threading.Thread(target=handle_client, args=(conn, addr))
+            thread.daemon = True
+            thread.start()
+            print(f"[{get_timestamp()}] [ACTIVE CONNECTIONS] {threading.active_count() - 1}")
+        except Exception as e:
+            print(f"[ERROR] {str(e)}")
 
 
-print("[STARTING] Server is running...")
+print("[STARTING] Secure server is starting...")
 start()
