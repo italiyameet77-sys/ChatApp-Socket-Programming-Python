@@ -472,7 +472,7 @@ $env:Path += ";C:\Program Files\OpenSSL-Win64\bin"
 
 ## 📄 License
 
-This project is open source and available under the MIT License.
+This project is open source and available under the [MIT License](LICENSE).
 
 Copyright (c) 2026 Meet Italiya
 
