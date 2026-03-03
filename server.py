@@ -119,7 +119,6 @@ def save_message(msg):
         
 def send_history(conn):
     # Check if history file exists
-    import os
     if not os.path.exists(HISTORY_FILE):
         send_message(conn, "[NO HISTORY YET]")
         return
